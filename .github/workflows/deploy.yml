@@ -1,0 +1,108 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main  # main 브랜치에 push될 때 자동 배포
+  workflow_dispatch:  # 수동 배포 트리거
+
+jobs:
+  deploy:
+    name: Deploy to Production Server
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create deployment package
+        run: |
+          mkdir -p deploy
+          rsync -av --exclude='node_modules' --exclude='.git' --exclude='deploy' ./ deploy/
+          cd deploy && npm ci --production
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            # 배포 디렉토리 설정
+            DEPLOY_DIR="/home/kbo-note/mock-server"
+
+            # 디렉토리가 없으면 생성
+            mkdir -p $DEPLOY_DIR
+
+            # 기존 백업 삭제 및 새 백업 생성
+            rm -rf $DEPLOY_DIR/backup
+            if [ -d "$DEPLOY_DIR/current" ]; then
+              mv $DEPLOY_DIR/current $DEPLOY_DIR/backup
+            fi
+
+            # 새 배포 디렉토리 생성
+            mkdir -p $DEPLOY_DIR/current
+
+            echo "Deployment directory prepared"
+
+      - name: Copy files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "deploy/*"
+          target: "/home/kbo-note/mock-server/current"
+          strip_components: 1
+
+      - name: Restart Application
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd /home/kbo-note/mock-server/current
+
+            # PM2가 설치되어 있는지 확인
+            if ! command -v pm2 &> /dev/null; then
+              echo "PM2 is not installed. Installing PM2..."
+              npm install -g pm2
+            fi
+
+            # 기존 프로세스 중지 및 삭제
+            pm2 delete kbo-mock-server 2>/dev/null || true
+
+            # 새 프로세스 시작
+            pm2 start ecosystem.config.js
+
+            # PM2 프로세스 목록 저장
+            pm2 save
+
+            # 애플리케이션 상태 확인
+            pm2 status
+
+      - name: Cleanup
+        if: always()
+        run: rm -rf deploy
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment succeeded!"
+          else
+            echo "❌ Deployment failed!"
+          fi
