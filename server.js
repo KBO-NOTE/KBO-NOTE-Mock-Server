@@ -25,19 +25,30 @@ app.get("/api/players/:player_id/feeds", checkAuth, (req, res) => {
   const { player_id } = req.params;
   const { cursor, size = 5 } = req.query;
 
-  console.log(
-    `[GET] /api/players/${player_id}/feeds - cursor: ${cursor}, size: ${size}`,
-  );
-
-  // 실제로는 cursor를 디코딩해서 페이지네이션 처리해야 하지만, Mock이므로 간단히 처리
   const pageSize = parseInt(size);
-  const items = mockData.feeds.slice(0, pageSize);
+
+  // 1. 커서가 없으면 0번 인덱스부터, 있으면 커서값을 숫자로 변환
+  // (실제 서비스에서는 복잡한 디코딩을 하겠지만, 목 서버에서는 인덱스로 처리하는 게 편합니다)
+  const startIndex = cursor ? parseInt(cursor) : 0;
+  const endIndex = startIndex + pageSize;
+
+  // 2. 해당 범위만큼 데이터 슬라이스
+  const items = mockData.feeds.slice(startIndex, endIndex);
+
+  // 3. 다음 데이터가 있는지 확인
+  const hasNext = endIndex < mockData.feeds.length;
+
+  // 4. 다음 커서 결정 (더 이상 데이터가 없으면 null)
+  const nextCursor = hasNext ? endIndex.toString() : null;
+
+  console.log(
+    `[GET] /api/players/${player_id}/feeds - range: [${startIndex} ~ ${endIndex}], nextCursor: ${nextCursor}`,
+  );
 
   res.json({
     items: items,
-    has_next: mockData.feeds.length > pageSize,
-    next_cursor:
-      "eyJzY29yZSI6MzUsInB1Ymxpc2hlZF9hdCI6IjIwMjYtMDItMDVUMDk6MTI6MDBaIiwiY29udGVudF9pZCI6MTAyNH0=",
+    has_next: hasNext,
+    next_cursor: nextCursor,
   });
 });
 
